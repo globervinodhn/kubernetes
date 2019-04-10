@@ -48,6 +48,46 @@ var _ = SIGDescribe("Job", func() {
 		Expect(err).NotTo(HaveOccurred(), "failed to ensure job completion in namespace: %s", f.Namespace.Name)
 	})
 
+	/*
+		Testcase: Verify that the job is not deleted when pods are deleted after job completion
+		Description: Create a job, verify the pod count to be equal to Paralellism count provided. Wait for job successful completion,
+						delete the pods and ensure that the job is not removed or deleted
+	*/
+	It("should be valid on pod deletion after successful completion", func() {
+		By("Creating a job")
+		job := framework.NewTestJob("failOnce", "job-succeed", v1.RestartPolicyOnFailure, parallelism, completions, nil, backoffLimit)
+		job, err := framework.CreateJob(f.ClientSet, f.Namespace.Name, job)
+		Expect(err).NotTo(HaveOccurred(), "failed to create job in namespace: %s", f.Namespace.Name)
+
+		By("Verify pod count for the job is equal to paralellism count")
+		err = framework.WaitForAllJobPodsRunning(f.ClientSet, f.Namespace.Name, job.Name, parallelism)
+		Expect(err).NotTo(HaveOccurred(), "failed to ensure pod count equal to paralellism count in namespace: %s", f.Namespace.Name)
+
+		By("Wait for job completion")
+		err = framework.WaitForJobComplete(f.ClientSet, f.Namespace.Name, job.Name, completions)
+		Expect(err).NotTo(HaveOccurred(), "failed to ensure job completion in namespace: %s", f.Namespace.Name)
+
+		By("Check for job validity")
+		_, err = framework.GetJob(f.ClientSet, f.Namespace.Name, job.Name)
+		Expect(err).NotTo(HaveOccurred(), "failed to ensure job %s is valid after successful completion in namespace: %s", job.Name, f.Namespace.Name)
+
+		pods, err := framework.GetJobPods(f.ClientSet, f.Namespace.Name, job.Name)
+		Expect(err).NotTo(HaveOccurred(), "failed to get PodList for job %s in namespace: %s", job.Name, f.Namespace.Name)
+		if len(pods.Items) != int(completions) {
+			framework.Failf("Pod count(%d) is not equal to expected count(%d)", len(pods.Items), completions)
+		}
+		By("Check for job pods status and delete them")
+		for _, pod := range pods.Items {
+			Expect(pod.Status.Phase).To(Equal(v1.PodSucceeded))
+			err = framework.DeleteResourceAndWaitForGC(f.ClientSet, batchinternal.Kind("Pod"), f.Namespace.Name, pod.Name)
+			Expect(err).NotTo(HaveOccurred(), "failed to delete the job in namespace: %s", f.Namespace.Name)
+		}
+
+		By("Ensure the job is still valid")
+		_, err = framework.GetJob(f.ClientSet, f.Namespace.Name, job.Name)
+		Expect(err).NotTo(HaveOccurred(), "failed to get the job %s in namespace: %s", job.Name, f.Namespace.Name)
+	})
+
 	// Pods sometimes fail, but eventually succeed.
 	It("should run a job to completion when tasks sometimes fail and are locally restarted", func() {
 		By("Creating a job")
